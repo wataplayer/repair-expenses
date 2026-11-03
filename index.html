@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f8">
+  <title>Конвертер валют</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="preconnect" href="https://upload.wikimedia.org">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">К содержимому</a>
+  <img
+    class="page-kitten"
+    src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/120px-Cat03.jpg"
+    alt="Кошечка"
+    width="72"
+    height="72"
+    fetchpriority="high"
+  >
+  <main class="card" id="main">
+    <h1>Конвертер валют</h1>
+    <form id="converter">
+      <label>
+        Сумма
+        <input
+          id="amount"
+          name="amount"
+          type="text"
+          inputmode="decimal"
+          value="100"
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="hint"
+          placeholder="например, 100…"
+        >
+      </label>
+      <div aria-live="polite">
+        <p id="hint" class="hint" hidden>Введите число, например <span class="num">100</span>.</p>
+      </div>
+      <div class="pair">
+        <label>
+          Из
+          <select id="from" name="from"></select>
+        </label>
+        <button id="swap" type="button">Поменять валюты</button>
+        <label>
+          В
+          <select id="to" name="to"></select>
+        </label>
+      </div>
+    </form>
+    <h2>Результат</h2>
+    <div id="output" aria-live="polite">
+      <p id="result" class="result"></p>
+      <p id="rate"></p>
+      <p id="inverse"></p>
+      <p id="meta" class="meta"></p>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

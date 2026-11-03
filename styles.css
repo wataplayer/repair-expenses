@@ -1,0 +1,194 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+}
+
+@media (pointer: fine) {
+  html {
+    overscroll-behavior: none;
+  }
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding:
+    max(32px, env(safe-area-inset-top))
+    max(88px, env(safe-area-inset-right))
+    max(32px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  overflow-x: hidden;
+  font-family: "Segoe UI", sans-serif;
+  background: #f4f6f8;
+  color: #1c2430;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: red;
+  text-wrap: balance;
+  scroll-margin-top: 16px;
+}
+
+.num,
+li::marker {
+  color: green;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-kitten {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  width: 72px;
+  height: auto;
+  z-index: 1000;
+}
+
+.skip {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 1001;
+  padding: 8px 12px;
+  transform: translateY(-150%);
+  background: #fff;
+  color: #1c2430;
+  border-radius: 8px;
+}
+
+.skip:focus-visible {
+  transform: none;
+}
+
+.card {
+  max-width: 420px;
+  margin: 48px auto;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #d5dbe3;
+  border-radius: 12px;
+}
+
+h1 {
+  margin: 0 0 20px;
+  font-size: 28px;
+}
+
+h2 {
+  margin: 24px 0 8px;
+  font-size: 20px;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+input,
+select,
+button,
+a {
+  font: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(28, 36, 48, 0.15);
+}
+
+input,
+select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #c5ced8;
+  border-radius: 8px;
+  background-color: #fff;
+  color: #1c2430;
+}
+
+#amount {
+  color: green;
+  font-variant-numeric: tabular-nums;
+}
+
+#amount::placeholder {
+  color: green;
+  opacity: 1;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+.skip:focus-visible {
+  outline: 2px solid #1c2430;
+  outline-offset: 2px;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+button {
+  padding: 8px 12px;
+  border: 1px solid #c5ced8;
+  border-radius: 8px;
+  background-color: #eef2f6;
+  color: #1c2430;
+  justify-self: start;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+button:hover,
+button:active {
+  background-color: #d5dee8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+}
+
+.result,
+#rate,
+#inverse {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.result {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.hint {
+  margin: -6px 0 0;
+}
+
+.meta {
+  margin-bottom: 0;
+  color: #5c6b7a;
+}
+
+p {
+  margin: 0 0 6px;
+}
