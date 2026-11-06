@@ -57,6 +57,7 @@ const formError = document.querySelector("#form-error");
 const saveButton = document.querySelector("#save");
 const cancelButton = document.querySelector("#cancel");
 const totalOutput = document.querySelector("#total");
+const breakdown = document.querySelector("#by-category");
 const countOutput = document.querySelector("#count");
 const statusOutput = document.querySelector("#status");
 const emptyOutput = document.querySelector("#empty");
@@ -66,28 +67,14 @@ const fields = [dateInput, amountInput, categoryInput, noteInput, fileInput];
 
 let expenses = [];
 let totalKopecks = 0;
+let byCategory = [];
 let entryCount = 0;
 let editingId = null;
 let saving = false;
 let previewUrl = "";
 
-function fillWithNums(element, text) {
-  const value = String(text);
-  const fragment = document.createDocumentFragment();
-  const re = /\d+/g;
-  let last = 0;
-  let match = re.exec(value);
-  while (match) {
-    if (match.index > last) fragment.append(value.slice(last, match.index));
-    const span = document.createElement("span");
-    span.className = "num";
-    span.textContent = match[0];
-    fragment.append(span);
-    last = match.index + match[0].length;
-    match = re.exec(value);
-  }
-  if (last < value.length) fragment.append(value.slice(last));
-  element.replaceChildren(fragment);
+function setText(element, text) {
+  element.textContent = text;
 }
 
 function todayISO() {
@@ -155,7 +142,7 @@ function fileKind(file) {
 }
 
 function announce(message) {
-  fillWithNums(statusOutput, message);
+  setText(statusOutput, message);
 }
 
 function setError(message) {
@@ -165,7 +152,7 @@ function setError(message) {
     return;
   }
   formError.hidden = false;
-  fillWithNums(formError, message);
+  setText(formError, message);
 }
 
 function clearInvalid() {
@@ -190,7 +177,7 @@ function clearPreview() {
 
 function showPreview(file, kind) {
   clearPreview();
-  fillWithNums(previewName, file.name);
+  setText(previewName, file.name);
   preview.hidden = false;
   if (kind?.mime?.startsWith("image/")) {
     previewUrl = URL.createObjectURL(file);
@@ -265,12 +252,41 @@ function receiptUrl(expense) {
   return `${API_URL}/api/receipts/${expense.id}/${expense.receipt_name}`;
 }
 
+function categoryTotals() {
+  const totals = new Map();
+  const rows = byCategory.length
+    ? byCategory
+    : expenses.map((expense) => ({
+      category: expense.category,
+      total_kopecks: expense.amount_kopecks,
+    }));
+  for (const row of rows) {
+    if (!Number.isSafeInteger(row.total_kopecks) || row.total_kopecks <= 0) continue;
+    const id = CATEGORIES.some((category) => category.id === row.category) ? row.category : "other";
+    totals.set(id, (totals.get(id) ?? 0) + row.total_kopecks);
+  }
+  return CATEGORIES
+    .map((category) => ({ name: category.name, total: totals.get(category.id) ?? 0 }))
+    .filter((category) => category.total > 0);
+}
+
 function render() {
-  fillWithNums(totalOutput, formatAmount(totalKopecks));
+  setText(totalOutput, formatAmount(totalKopecks));
+  breakdown.replaceChildren();
+  for (const category of categoryTotals()) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = category.name;
+    const amount = document.createElement("span");
+    amount.className = "breakdown-amount";
+    amount.textContent = formatAmount(category.total);
+    item.append(name, amount);
+    breakdown.append(item);
+  }
   const countText = entryCount > expenses.length
     ? `Записей: ${entryCount}. В списке ${expenses.length}.`
     : `Записей: ${expenses.length}`;
-  fillWithNums(countOutput, countText);
+  setText(countOutput, countText);
   emptyOutput.hidden = expenses.length !== 0;
   list.replaceChildren();
 
@@ -280,7 +296,7 @@ function render() {
     if (expense.id === editingId) item.dataset.editing = "true";
 
     const title = document.createElement("h3");
-    fillWithNums(title, formatDate(expense.spent_on));
+    setText(title, formatDate(expense.spent_on));
     item.append(title);
 
     const category = document.createElement("p");
@@ -291,13 +307,13 @@ function render() {
     if (expense.note) {
       const note = document.createElement("p");
       note.className = "note";
-      fillWithNums(note, expense.note);
+      setText(note, expense.note);
       item.append(note);
     }
 
     const amount = document.createElement("p");
     amount.className = "amount";
-    fillWithNums(amount, formatAmount(expense.amount_kopecks));
+    setText(amount, formatAmount(expense.amount_kopecks));
     item.append(amount);
 
     const url = receiptUrl(expense);
@@ -381,6 +397,9 @@ async function loadExpenses() {
   totalKopecks = Number.isSafeInteger(data?.total_kopecks)
     ? data.total_kopecks
     : expenses.reduce((sum, expense) => sum + expense.amount_kopecks, 0);
+  byCategory = Array.isArray(data?.by_category)
+    ? data.by_category.filter((row) => row && typeof row.category === "string" && Number.isSafeInteger(row.total_kopecks))
+    : [];
   entryCount = Number.isSafeInteger(data?.count) ? data.count : expenses.length;
   render();
 }

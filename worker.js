@@ -170,10 +170,17 @@ async function listExpenses(env, origin) {
   const totals = await env.DB.prepare(
     "select count(*) as expense_count, coalesce(sum(amount_kopecks), 0) as total_kopecks from expenses",
   ).first();
+  const grouped = await env.DB.prepare(
+    "select category, coalesce(sum(amount_kopecks), 0) as total_kopecks from expenses group by category",
+  ).all();
   return json({
     expenses: (listed.results ?? []).map(publicExpense),
     count: Number(totals?.expense_count ?? 0),
     total_kopecks: Number(totals?.total_kopecks ?? 0),
+    by_category: (grouped.results ?? []).map((row) => ({
+      category: typeof row.category === "string" ? row.category : "other",
+      total_kopecks: Number(row.total_kopecks ?? 0),
+    })),
   }, 200, origin);
 }
 

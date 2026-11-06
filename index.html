@@ -3,22 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f6f8">
+  <meta name="theme-color" content="#f3efe8">
   <meta name="description" content="Общий журнал расходов на ремонт: сумма, категория и чек.">
   <title>Учёт ремонта</title>
-  <link rel="preconnect" href="https://upload.wikimedia.org">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <a class="skip" href="#main">К содержимому</a>
-  <img
-    class="page-kitten"
-    src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/120px-Cat03.jpg"
-    alt="Кошечка"
-    width="72"
-    height="72"
-    fetchpriority="high"
-  >
   <main id="main">
     <h1>Учёт ремонта</h1>
     <p class="lead">Суммы и чеки общие для всех, у кого есть ссылка на эту страницу.</p>
@@ -43,7 +34,7 @@
           aria-errormessage="form-error"
           required
         >
-        <p id="amount-hint" class="hint">Например, <span class="num">1500</span> или <span class="num">1500</span>,<span class="num">50</span>.</p>
+        <p id="amount-hint" class="hint">Например, 1500 или 1500,50.</p>
       </div>
       <div class="pair">
         <label for="category">Категория</label>
@@ -77,7 +68,7 @@
           aria-describedby="file-hint replace-hint"
           aria-errormessage="form-error"
         >
-        <p id="file-hint" class="hint">JPEG, PNG, WebP или PDF, до <span class="num">10</span> МБ.</p>
+        <p id="file-hint" class="hint">JPEG, PNG, WebP или PDF, до 10 МБ.</p>
         <p id="replace-hint" class="hint" hidden>Новый файл заменит текущий чек. Если файл не выбран, чек останется.</p>
         <div id="preview" class="preview" hidden>
           <img id="preview-image" alt="" hidden>
@@ -93,6 +84,7 @@
     <section class="card" aria-labelledby="total-title">
       <h2 id="total-title">Итого</h2>
       <p id="total" class="result"></p>
+      <ul id="by-category"></ul>
       <p id="count" class="meta"></p>
     </section>
     <section class="list-section" aria-labelledby="list-title">
