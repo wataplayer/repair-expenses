@@ -349,14 +349,41 @@ async function startUpload(request, env, origin) {
     assembled: 0,
     expense_id: expenseId,
   };
-  await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
+  await env.DB.prepare(
+    `insert into uploads
+      (id, spent_on, amount_kopecks, category, note, total_bytes, content_type, parts, assembled, expense_id)
+     values (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+  ).bind(
+    id,
+    meta.spent_on,
+    meta.amount_kopecks,
+    meta.category,
+    meta.note,
+    meta.total_bytes,
+    meta.content_type,
+    meta.parts,
+    meta.expense_id,
+  ).run();
   return json({ id, chunk_size: CHUNK_BYTES }, 201, origin);
 }
 
+function asBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  return new Uint8Array(value);
+}
+
+async function loadUpload(env, id) {
+  return env.DB.prepare(
+    `select id, spent_on, amount_kopecks, category, note, total_bytes, content_type, parts, assembled, expense_id
+     from uploads where id = ?`,
+  ).bind(id).first();
+}
+
 async function appendChunk(request, env, origin, id, index) {
-  const metaText = await env.RECEIPTS.get(`upload/${id}/meta`, { type: "text" });
-  if (!metaText) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
-  const meta = JSON.parse(metaText);
+  const meta = await loadUpload(env, id);
+  if (!meta) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
   if (!Number.isSafeInteger(index) || index < 0 || index >= meta.parts) {
     return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
   }
@@ -367,51 +394,64 @@ async function appendChunk(request, env, origin, id, index) {
   if (chunk.byteLength !== expected) {
     return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
   }
-  await env.RECEIPTS.put(`upload/${id}/part/${index}`, chunk, { expirationTtl: UPLOAD_TTL });
+  await env.DB.prepare(
+    `insert into upload_parts (upload_id, part_index, bytes) values (?, ?, ?)
+     on conflict (upload_id, part_index) do update set bytes = excluded.bytes`,
+  ).bind(id, index, chunk).run();
   return json({ ok: true, index }, 200, origin);
 }
 
 async function finishUpload(env, origin, id) {
-  const metaText = await env.RECEIPTS.get(`upload/${id}/meta`, { type: "text" });
-  if (!metaText) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
-  const meta = JSON.parse(metaText);
-  if (meta.received !== meta.total_bytes || meta.parts < 1) {
+  const meta = await loadUpload(env, id);
+  if (!meta || meta.parts < 1) {
     return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
   }
-  const batch = 5;
+  const saved = await env.DB.prepare(
+    "select count(*) as saved_parts from upload_parts where upload_id = ?",
+  ).bind(id).first();
+  if (Number(saved?.saved_parts ?? 0) < meta.parts) {
+    return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  }
+  const batch = 8;
   const from = meta.assembled || 0;
   const to = Math.min(meta.parts, from + batch);
-  const targetLength = to >= meta.parts ? meta.total_bytes : to * CHUNK_BYTES;
-  const pieces = [];
-  let extra = 0;
-  if (from > 0) {
+  const rows = await env.DB.prepare(
+    `select part_index, bytes from upload_parts
+     where upload_id = ? and part_index >= ? and part_index < ?
+     order by part_index`,
+  ).bind(id, from, to).all();
+  const parts = rows.results ?? [];
+  if (parts.length !== to - from) {
+    return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  }
+  let joined;
+  if (from === 0) {
+    let extra = 0;
+    const pieces = parts.map((row) => {
+      const piece = asBytes(row.bytes);
+      extra += piece.byteLength;
+      return piece;
+    });
+    joined = new Uint8Array(extra);
+    let offset = 0;
+    for (const piece of pieces) {
+      joined.set(piece, offset);
+      offset += piece.byteLength;
+    }
+  } else {
     const current = await env.RECEIPTS.get(`upload/${id}/data`, { type: "arrayBuffer" });
     if (!current) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
-    if (current.byteLength === targetLength) {
-      meta.assembled = to;
-      await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
-      if (to < meta.parts) return json({ done: false, assembled: to, parts: meta.parts }, 200, origin);
-      const bytes = new Uint8Array(current);
-      return commitUpload(env, origin, id, meta, bytes);
+    const pieces = [new Uint8Array(current), ...parts.map((row) => asBytes(row.bytes))];
+    const extra = pieces.reduce((sum, piece) => sum + piece.byteLength, 0);
+    joined = new Uint8Array(extra);
+    let offset = 0;
+    for (const piece of pieces) {
+      joined.set(piece, offset);
+      offset += piece.byteLength;
     }
-    pieces.push(new Uint8Array(current));
-    extra += current.byteLength;
   }
-  for (let index = from; index < to; index += 1) {
-    const part = await env.RECEIPTS.get(`upload/${id}/part/${index}`, { type: "arrayBuffer" });
-    if (!part) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
-    pieces.push(new Uint8Array(part));
-    extra += part.byteLength;
-  }
-  const joined = new Uint8Array(extra);
-  let offset = 0;
-  for (const piece of pieces) {
-    joined.set(piece, offset);
-    offset += piece.byteLength;
-  }
-  await env.RECEIPTS.put(`upload/${id}/data`, joined, { expirationTtl: UPLOAD_TTL });
-  meta.assembled = to;
-  await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
+  await env.RECEIPTS.put(`upload/${id}/data`, joined);
+  await env.DB.prepare("update uploads set assembled = ? where id = ?").bind(to, id).run();
   if (to < meta.parts) return json({ done: false, assembled: to, parts: meta.parts }, 200, origin);
   return commitUpload(env, origin, id, meta, joined);
 }
@@ -457,7 +497,8 @@ async function commitUpload(env, origin, id, meta, bytes) {
     throw error;
   }
   await discardReceipt(env, `upload/${id}/data`);
-  await discardReceipt(env, `upload/${id}/meta`);
+  await env.DB.prepare("delete from upload_parts where upload_id = ?").bind(id).run();
+  await env.DB.prepare("delete from uploads where id = ?").bind(id).run();
   return json({ id: expenseId }, 200, origin);
 }
 

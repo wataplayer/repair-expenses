@@ -58,6 +58,7 @@ const replaceHint = document.querySelector("#replace-hint");
 const preview = document.querySelector("#preview");
 const previewImage = document.querySelector("#preview-image");
 const previewName = document.querySelector("#preview-name");
+const uploadStatus = document.querySelector("#upload-status");
 const formError = document.querySelector("#form-error");
 const saveButton = document.querySelector("#save");
 const cancelButton = document.querySelector("#cancel");
@@ -148,6 +149,13 @@ function fileKind(file) {
 
 function announce(message) {
   setText(statusOutput, message);
+  if (!message) {
+    uploadStatus.hidden = true;
+    uploadStatus.replaceChildren();
+    return;
+  }
+  uploadStatus.hidden = false;
+  setText(uploadStatus, message);
 }
 
 function setError(message) {
@@ -205,6 +213,7 @@ function resetForm() {
   saveButton.textContent = "Добавить";
   cancelButton.hidden = true;
   replaceHint.hidden = true;
+  announce("");
   clearPreview();
   clearInvalid();
 }
@@ -439,6 +448,7 @@ async function shrinkImage(file) {
 }
 
 async function sendReceipt(value, expenseId) {
+  announce("Подготовка чека…");
   const smaller = await shrinkImage(value.file);
   if (smaller !== value.file) {
     value = { ...value, file: smaller, kind: { mime: "image/jpeg", ext: "jpg" } };
@@ -452,11 +462,19 @@ async function sendReceipt(value, expenseId) {
     content_type: value.kind.mime,
   };
   if (expenseId) payload.expense_id = expenseId;
-  const started = await api("/api/uploads", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let started = null;
+  for (let attempt = 0; attempt < 6 && !started?.id; attempt += 1) {
+    try {
+      started = await api("/api/uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(35000),
+      });
+    } catch (error) {
+      if (attempt === 5) throw error;
+    }
+  }
   const size = Number.isSafeInteger(started?.chunk_size) && started.chunk_size > 0
     ? started.chunk_size
     : 4000;
@@ -583,6 +601,7 @@ form.addEventListener("submit", async (event) => {
     amountInput.focus();
   } catch (error) {
     console.error(error);
+    announce("");
     setError(knownError(error.appMessage));
   } finally {
     saving = false;
