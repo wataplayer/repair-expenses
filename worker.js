@@ -1,14 +1,18 @@
 const CATEGORIES = new Set(["materials", "work", "delivery", "tools", "other"]);
 const MAX_BYTES = 10 * 1024 * 1024;
+const CHUNK_BYTES = 8000;
+const UPLOAD_TTL = 60 * 60 * 24;
 const EXT = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
   "application/pdf": "pdf",
+  "image/heic": "heic",
+  "image/heif": "heic",
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const FILE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|pdf)$/;
+const FILE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|pdf|heic)$/;
 
 function allowedOrigin(request) {
   const origin = request.headers.get("Origin");
@@ -21,7 +25,7 @@ function allowedOrigin(request) {
 function corsHeaders(origin) {
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "access-control-allow-headers": "content-type",
     "access-control-max-age": "86400",
     vary: "Origin",
@@ -51,7 +55,7 @@ function parseKopecks(raw) {
 }
 
 function matchesMagic(bytes, mime) {
-  const data = new Uint8Array(bytes);
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (mime === "image/jpeg") {
     return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
   }
@@ -66,7 +70,16 @@ function matchesMagic(bytes, mime) {
       && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
       && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50;
   }
+  if (mime === "image/heic" || mime === "image/heif") return isHeic(data);
   return false;
+}
+
+function isHeic(data) {
+  if (data.length < 12) return false;
+  const box = String.fromCharCode(data[4], data[5], data[6], data[7]);
+  if (box !== "ftyp") return false;
+  const brand = String.fromCharCode(data[8], data[9], data[10], data[11]);
+  return ["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand);
 }
 
 function detectMime(bytes, declared) {
@@ -81,8 +94,7 @@ function detectMime(bytes, declared) {
 function isUpload(value) {
   return Boolean(value)
     && typeof value === "object"
-    && typeof value.arrayBuffer === "function"
-    && typeof value.size === "number";
+    && typeof value.arrayBuffer === "function";
 }
 
 function receiptName(key) {
@@ -133,21 +145,22 @@ async function readPayload(request) {
   const file = formData.get("receipt");
   let stored = null;
   if (isUpload(file)) {
-    if (file.size <= 0) return { error: "Файл пустой.", status: 400 };
-    if (file.size > MAX_BYTES) return { error: "Файл больше 10 МБ.", status: 413 };
-    const bytes = await file.arrayBuffer();
-    if (bytes.byteLength <= 0) return { error: "Файл пустой.", status: 400 };
-    if (bytes.byteLength > MAX_BYTES) return { error: "Файл больше 10 МБ.", status: 413 };
-    const mime = detectMime(bytes, typeof file.type === "string" ? file.type : "");
-    if (!mime) return { error: "Нужен файл JPEG, PNG, WebP или PDF.", status: 400 };
-    stored = { bytes, mime, ext: EXT[mime] };
+    const size = typeof file.size === "number" ? file.size : 0;
+    if (size > MAX_BYTES) return { error: "Файл больше 10 МБ.", status: 413 };
+    const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+    if (head.length === 0) return { error: "Файл пустой.", status: 400 };
+    const declared = typeof file.type === "string" ? file.type : "";
+    const mime = detectMime(head, declared);
+    if (!mime) return { error: "Нужен файл JPEG, PNG, WebP, PDF или HEIC.", status: 400 };
+    const body = typeof file.stream === "function" ? file.stream() : head;
+    stored = { body, mime, ext: EXT[mime] };
   }
   return { value: { spentOn, kopecks, category, note, stored } };
 }
 
 async function storeReceipt(env, expenseId, stored) {
   const key = `${expenseId}/${crypto.randomUUID()}.${stored.ext}`;
-  await env.RECEIPTS.put(key, stored.bytes);
+  await env.RECEIPTS.put(key, stored.body);
   return key;
 }
 
@@ -282,6 +295,161 @@ async function readReceipt(env, origin, id, name) {
   return new Response(bytes, { status: 200, headers });
 }
 
+function fieldError(spentOn, kopecks, category, note) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn) || spentOn < "2000-01-01" || spentOn > "2100-12-31") {
+    return "Укажите дату.";
+  }
+  if (kopecks === null) return "Введите сумму больше нуля, например 1500 или 1500,50.";
+  if (!CATEGORIES.has(category)) return "Выберите категорию.";
+  if (note.length > 200 || [...note].length > 200) return "Заметка длиннее 200 символов.";
+  return "";
+}
+
+async function readJson(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
+async function startUpload(request, env, origin) {
+  const body = await readJson(request);
+  if (!body || typeof body !== "object") {
+    return json({ error: "Не удалось выполнить действие. Проверьте соединение и попробуйте ещё раз." }, 400, origin);
+  }
+  const spentOn = typeof body.spent_on === "string" ? body.spent_on.trim() : "";
+  const kopecks = parseKopecks(String(body.amount_kopecks ?? "").trim());
+  const category = typeof body.category === "string" ? body.category.trim() : "";
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  const invalid = fieldError(spentOn, kopecks, category, note);
+  if (invalid) return json({ error: invalid }, 400, origin);
+  const total = Number(body.total_bytes);
+  if (!Number.isSafeInteger(total) || total < 1) return json({ error: "Файл пустой." }, 400, origin);
+  if (total > MAX_BYTES) return json({ error: "Файл больше 10 МБ." }, 413, origin);
+  let expenseId = null;
+  if (body.expense_id) {
+    if (typeof body.expense_id !== "string" || !UUID.test(body.expense_id)) {
+      return json({ error: "Этой записи уже нет. Обновите страницу." }, 404, origin);
+    }
+    const current = await env.DB.prepare("select id from expenses where id = ?").bind(body.expense_id).first();
+    if (!current) return json({ error: "Этой записи уже нет. Обновите страницу." }, 404, origin);
+    expenseId = body.expense_id;
+  }
+  const id = crypto.randomUUID();
+  const meta = {
+    spent_on: spentOn,
+    amount_kopecks: kopecks,
+    category,
+    note,
+    total_bytes: total,
+    content_type: typeof body.content_type === "string" ? body.content_type : "",
+    received: total,
+    parts: Math.ceil(total / CHUNK_BYTES),
+    assembled: 0,
+    expense_id: expenseId,
+  };
+  await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
+  return json({ id, chunk_size: CHUNK_BYTES }, 201, origin);
+}
+
+async function appendChunk(request, env, origin, id, index) {
+  const metaText = await env.RECEIPTS.get(`upload/${id}/meta`, { type: "text" });
+  if (!metaText) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  const meta = JSON.parse(metaText);
+  if (!Number.isSafeInteger(index) || index < 0 || index >= meta.parts) {
+    return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  }
+  const expected = index === meta.parts - 1
+    ? meta.total_bytes - index * CHUNK_BYTES
+    : CHUNK_BYTES;
+  const chunk = new Uint8Array(await request.arrayBuffer());
+  if (chunk.byteLength !== expected) {
+    return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  }
+  await env.RECEIPTS.put(`upload/${id}/part/${index}`, chunk, { expirationTtl: UPLOAD_TTL });
+  return json({ ok: true, index }, 200, origin);
+}
+
+async function finishUpload(env, origin, id) {
+  const metaText = await env.RECEIPTS.get(`upload/${id}/meta`, { type: "text" });
+  if (!metaText) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  const meta = JSON.parse(metaText);
+  if (meta.received !== meta.total_bytes || meta.parts < 1) {
+    return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+  }
+  const batch = 15;
+  const from = meta.assembled || 0;
+  const to = Math.min(meta.parts, from + batch);
+  const pieces = [];
+  let extra = 0;
+  if (from > 0) {
+    const current = await env.RECEIPTS.get(`upload/${id}/data`, { type: "arrayBuffer" });
+    if (!current) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+    pieces.push(new Uint8Array(current));
+    extra += current.byteLength;
+  }
+  for (let index = from; index < to; index += 1) {
+    const part = await env.RECEIPTS.get(`upload/${id}/part/${index}`, { type: "arrayBuffer" });
+    if (!part) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+    pieces.push(new Uint8Array(part));
+    extra += part.byteLength;
+  }
+  const joined = new Uint8Array(extra);
+  let offset = 0;
+  for (const piece of pieces) {
+    joined.set(piece, offset);
+    offset += piece.byteLength;
+  }
+  await env.RECEIPTS.put(`upload/${id}/data`, joined, { expirationTtl: UPLOAD_TTL });
+  meta.assembled = to;
+  await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
+  if (to < meta.parts) return json({ done: false, assembled: to, parts: meta.parts }, 200, origin);
+  const bytes = joined;
+  const mime = detectMime(bytes.subarray(0, 32), meta.content_type);
+  if (!mime) return json({ error: "Нужен файл JPEG, PNG, WebP, PDF или HEIC." }, 400, origin);
+  const expenseId = meta.expense_id || crypto.randomUUID();
+  const receiptKey = `${expenseId}/${crypto.randomUUID()}.${EXT[mime]}`;
+  await env.RECEIPTS.put(receiptKey, bytes);
+  try {
+    if (meta.expense_id) {
+      const current = await env.DB.prepare(
+        "select receipt_key from expenses where id = ?",
+      ).bind(expenseId).first();
+      if (!current) return json({ error: "Этой записи уже нет. Обновите страницу." }, 404, origin);
+      const updated = await env.DB.prepare(
+        `update expenses
+         set spent_on = ?, amount_kopecks = ?, category = ?, note = ?, receipt_key = ?, receipt_type = ?
+         where id = ?
+         returning id`,
+      ).bind(meta.spent_on, meta.amount_kopecks, meta.category, meta.note, receiptKey, mime, expenseId).first();
+      if (!updated) return json({ error: "Этой записи уже нет. Обновите страницу." }, 404, origin);
+      if (current.receipt_key && current.receipt_key !== receiptKey) await discardReceipt(env, current.receipt_key);
+    } else {
+      await env.DB.prepare(
+        `insert into expenses
+          (id, spent_on, amount_kopecks, category, note, receipt_key, receipt_type, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        expenseId,
+        meta.spent_on,
+        meta.amount_kopecks,
+        meta.category,
+        meta.note,
+        receiptKey,
+        mime,
+        new Date().toISOString(),
+      ).run();
+    }
+  } catch (error) {
+    await discardReceipt(env, receiptKey);
+    throw error;
+  }
+  await discardReceipt(env, `upload/${id}/data`);
+  await discardReceipt(env, `upload/${id}/meta`);
+  return json({ id: expenseId }, 200, origin);
+}
+
 async function handle(request, env) {
   const origin = allowedOrigin(request);
   if (origin === false) {
@@ -295,10 +463,17 @@ async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   const expenseMatch = /^\/api\/expenses\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(path);
-  const receiptMatch = /^\/api\/receipts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp|pdf))$/.exec(path);
+  const uploadFinish = /^\/api\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/finish$/.exec(path);
+  const uploadPart = /^\/api\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(\d+)$/.exec(path);
+  const receiptMatch = /^\/api\/receipts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp|pdf|heic))$/.exec(path);
 
   if (path === "/api/expenses" && request.method === "GET") return listExpenses(env, origin);
   if (path === "/api/expenses" && request.method === "POST") return createExpense(request, env, origin);
+  if (path === "/api/uploads" && request.method === "POST") return startUpload(request, env, origin);
+  if (uploadFinish && request.method === "POST") return finishUpload(env, origin, uploadFinish[1]);
+  if (uploadPart && request.method === "PUT") {
+    return appendChunk(request, env, origin, uploadPart[1], Number(uploadPart[2]));
+  }
   if (expenseMatch && request.method === "PATCH") return updateExpense(request, env, origin, expenseMatch[1]);
   if (expenseMatch && request.method === "DELETE") return deleteExpense(env, origin, expenseMatch[1]);
   if (receiptMatch && request.method === "GET") {

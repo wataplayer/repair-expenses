@@ -18,6 +18,8 @@ const MIME_EXT = {
   "image/png": "png",
   "image/webp": "webp",
   "application/pdf": "pdf",
+  "image/heic": "heic",
+  "image/heif": "heic",
 };
 
 const EXT_MIME = {
@@ -26,6 +28,8 @@ const EXT_MIME = {
   png: "image/png",
   webp: "image/webp",
   pdf: "application/pdf",
+  heic: "image/heic",
+  heif: "image/heic",
 };
 
 const KNOWN_ERRORS = new Set([
@@ -35,9 +39,10 @@ const KNOWN_ERRORS = new Set([
   "Заметка длиннее 200 символов.",
   "Файл пустой.",
   "Файл больше 10 МБ.",
-  "Нужен файл JPEG, PNG, WebP или PDF.",
+  "Нужен файл JPEG, PNG, WebP, PDF или HEIC.",
   "Этой записи уже нет. Обновите страницу.",
   "Чек не найден.",
+  "Чек загрузился не полностью. Попробуйте ещё раз.",
   "Хранилище ещё не подключено.",
   "Не удалось выполнить действие. Проверьте соединение и попробуйте ещё раз.",
 ]);
@@ -136,7 +141,7 @@ function fileKind(file) {
   if (!mime && (file.type === "" || file.type === "application/octet-stream")) {
     mime = EXT_MIME[extensionOf(file.name)] ?? "";
   }
-  if (!mime) return { error: "Нужен файл JPEG, PNG, WebP или PDF." };
+  if (!mime) return { error: "Нужен файл JPEG, PNG, WebP, PDF или HEIC." };
   const canonical = mime === "image/jpg" ? "image/jpeg" : mime;
   return { mime: canonical, ext: MIME_EXT[canonical] };
 }
@@ -179,7 +184,7 @@ function showPreview(file, kind) {
   clearPreview();
   setText(previewName, file.name);
   preview.hidden = false;
-  if (kind?.mime?.startsWith("image/")) {
+  if (kind?.mime === "image/jpeg" || kind?.mime === "image/png" || kind?.mime === "image/webp") {
     previewUrl = URL.createObjectURL(file);
     previewImage.src = previewUrl;
     previewImage.hidden = false;
@@ -248,7 +253,7 @@ function readForm() {
 
 function receiptUrl(expense) {
   if (!/^[0-9a-f-]{36}$/.test(expense.id)) return "";
-  if (!/^[0-9a-f-]{36}\.(jpg|png|webp|pdf)$/.test(expense.receipt_name ?? "")) return "";
+  if (!/^[0-9a-f-]{36}\.(jpg|png|webp|pdf|heic)$/.test(expense.receipt_name ?? "")) return "";
   return `${API_URL}/api/receipts/${expense.id}/${expense.receipt_name}`;
 }
 
@@ -358,7 +363,7 @@ function normalize(row) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(row.spent_on)) return null;
   if (!Number.isSafeInteger(row.amount_kopecks)) return null;
   const receiptName = typeof row.receipt_name === "string"
-    && /^[0-9a-f-]{36}\.(jpg|png|webp|pdf)$/.test(row.receipt_name)
+    && /^[0-9a-f-]{36}\.(jpg|png|webp|pdf|heic)$/.test(row.receipt_name)
     ? row.receipt_name
     : null;
   return {
@@ -414,11 +419,64 @@ function formDataFor(value) {
   return body;
 }
 
+async function sendReceipt(value, expenseId) {
+  const payload = {
+    spent_on: value.spentOn,
+    amount_kopecks: value.kopecks,
+    category: value.category,
+    note: value.note,
+    total_bytes: value.file.size,
+    content_type: value.kind.mime,
+  };
+  if (expenseId) payload.expense_id = expenseId;
+  const started = await api("/api/uploads", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const size = Number.isSafeInteger(started?.chunk_size) && started.chunk_size > 0
+    ? started.chunk_size
+    : 8000;
+  const total = value.file.size;
+  const parts = Math.max(1, Math.ceil(total / size));
+  for (let index = 0; index < parts; index += 1) {
+    announce(`Загрузка чека: ${index + 1} из ${parts}`);
+    const slice = value.file.slice(index * size, Math.min(total, (index + 1) * size));
+    let saved = false;
+    for (let attempt = 0; attempt < 4 && !saved; attempt += 1) {
+      try {
+        await api(`/api/uploads/${started.id}/${index}`, {
+          method: "PUT",
+          headers: { "content-type": "application/octet-stream" },
+          body: slice,
+          signal: AbortSignal.timeout(8000),
+        });
+        saved = true;
+      } catch (error) {
+        if (attempt === 3) throw error;
+      }
+    }
+  }
+  let finished = false;
+  while (!finished) {
+    const step = await api(`/api/uploads/${started.id}/finish`, { method: "POST" });
+    finished = step?.done !== false;
+  }
+}
+
 async function createExpense(value) {
+  if (value.file) {
+    await sendReceipt(value, null);
+    return;
+  }
   await api("/api/expenses", { method: "POST", body: formDataFor(value) });
 }
 
 async function updateExpense(id, value) {
+  if (value.file) {
+    await sendReceipt(value, id);
+    return;
+  }
   await api(`/api/expenses/${id}`, { method: "PATCH", body: formDataFor(value) });
 }
 
