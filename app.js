@@ -419,7 +419,30 @@ function formDataFor(value) {
   return body;
 }
 
+async function shrinkImage(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/heic" || file.type === "image/heif") return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxEdge = 1400;
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.72));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], "receipt.jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
 async function sendReceipt(value, expenseId) {
+  const smaller = await shrinkImage(value.file);
+  if (smaller !== value.file) {
+    value = { ...value, file: smaller, kind: { mime: "image/jpeg", ext: "jpg" } };
+  }
   const payload = {
     spent_on: value.spentOn,
     amount_kopecks: value.kopecks,
@@ -436,31 +459,41 @@ async function sendReceipt(value, expenseId) {
   });
   const size = Number.isSafeInteger(started?.chunk_size) && started.chunk_size > 0
     ? started.chunk_size
-    : 8000;
+    : 4000;
   const total = value.file.size;
   const parts = Math.max(1, Math.ceil(total / size));
   for (let index = 0; index < parts; index += 1) {
     announce(`Загрузка чека: ${index + 1} из ${parts}`);
     const slice = value.file.slice(index * size, Math.min(total, (index + 1) * size));
     let saved = false;
-    for (let attempt = 0; attempt < 4 && !saved; attempt += 1) {
+    for (let attempt = 0; attempt < 6 && !saved; attempt += 1) {
       try {
         await api(`/api/uploads/${started.id}/${index}`, {
           method: "PUT",
           headers: { "content-type": "application/octet-stream" },
           body: slice,
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(35000),
         });
         saved = true;
       } catch (error) {
-        if (attempt === 3) throw error;
+        if (attempt === 5) throw error;
       }
     }
   }
   let finished = false;
+  let finishAttempts = 0;
   while (!finished) {
-    const step = await api(`/api/uploads/${started.id}/finish`, { method: "POST" });
-    finished = step?.done !== false;
+    try {
+      const step = await api(`/api/uploads/${started.id}/finish`, {
+        method: "POST",
+        signal: AbortSignal.timeout(35000),
+      });
+      finished = step?.done !== false;
+      finishAttempts = 0;
+    } catch (error) {
+      finishAttempts += 1;
+      if (finishAttempts > 6) throw error;
+    }
   }
 }
 

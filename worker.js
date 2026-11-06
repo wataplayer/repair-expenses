@@ -1,6 +1,6 @@
 const CATEGORIES = new Set(["materials", "work", "delivery", "tools", "other"]);
 const MAX_BYTES = 10 * 1024 * 1024;
-const CHUNK_BYTES = 8000;
+const CHUNK_BYTES = 4000;
 const UPLOAD_TTL = 60 * 60 * 24;
 const EXT = {
   "image/jpeg": "jpg",
@@ -378,14 +378,22 @@ async function finishUpload(env, origin, id) {
   if (meta.received !== meta.total_bytes || meta.parts < 1) {
     return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
   }
-  const batch = 15;
+  const batch = 5;
   const from = meta.assembled || 0;
   const to = Math.min(meta.parts, from + batch);
+  const targetLength = to >= meta.parts ? meta.total_bytes : to * CHUNK_BYTES;
   const pieces = [];
   let extra = 0;
   if (from > 0) {
     const current = await env.RECEIPTS.get(`upload/${id}/data`, { type: "arrayBuffer" });
     if (!current) return json({ error: "Чек загрузился не полностью. Попробуйте ещё раз." }, 400, origin);
+    if (current.byteLength === targetLength) {
+      meta.assembled = to;
+      await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
+      if (to < meta.parts) return json({ done: false, assembled: to, parts: meta.parts }, 200, origin);
+      const bytes = new Uint8Array(current);
+      return commitUpload(env, origin, id, meta, bytes);
+    }
     pieces.push(new Uint8Array(current));
     extra += current.byteLength;
   }
@@ -405,7 +413,10 @@ async function finishUpload(env, origin, id) {
   meta.assembled = to;
   await env.RECEIPTS.put(`upload/${id}/meta`, JSON.stringify(meta), { expirationTtl: UPLOAD_TTL });
   if (to < meta.parts) return json({ done: false, assembled: to, parts: meta.parts }, 200, origin);
-  const bytes = joined;
+  return commitUpload(env, origin, id, meta, joined);
+}
+
+async function commitUpload(env, origin, id, meta, bytes) {
   const mime = detectMime(bytes.subarray(0, 32), meta.content_type);
   if (!mime) return json({ error: "Нужен файл JPEG, PNG, WebP, PDF или HEIC." }, 400, origin);
   const expenseId = meta.expense_id || crypto.randomUUID();
