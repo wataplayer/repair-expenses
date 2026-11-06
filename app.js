@@ -1,67 +1,119 @@
-const CURRENCIES = [
-  { code: "RUB", name: "Российский рубль" },
-  { code: "USD", name: "Доллар США" },
-  { code: "EUR", name: "Евро" },
-  { code: "GBP", name: "Фунт стерлингов" },
-  { code: "CNY", name: "Китайский юань" },
-  { code: "KZT", name: "Казахстанский тенге" },
-  { code: "BYN", name: "Белорусский рубль" },
+import { API_URL } from "./config.js";
+
+const CATEGORIES = [
+  { id: "materials", name: "Материалы" },
+  { id: "work", name: "Работы" },
+  { id: "delivery", name: "Доставка" },
+  { id: "tools", name: "Инструмент" },
+  { id: "other", name: "Прочее" },
 ];
 
-const FALLBACK_RATES = {
-  usd: 1,
-  eur: 0.92,
-  gbp: 0.78,
-  cny: 7.1,
-  rub: 95,
-  kzt: 490,
-  byn: 3.27,
+const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_NOTE = 200;
+const MAX_KOPECKS = 9999999999;
+
+const MIME_EXT = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "application/pdf": "pdf",
 };
 
-const API_URL =
-  "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.min.json";
+const EXT_MIME = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  pdf: "application/pdf",
+};
 
+const KNOWN_ERRORS = new Set([
+  "Укажите дату.",
+  "Введите сумму больше нуля, например 1500 или 1500,50.",
+  "Выберите категорию.",
+  "Заметка длиннее 200 символов.",
+  "Файл пустой.",
+  "Файл больше 10 МБ.",
+  "Нужен файл JPEG, PNG, WebP или PDF.",
+  "Этой записи уже нет. Обновите страницу.",
+  "Чек не найден.",
+  "Хранилище ещё не подключено.",
+  "Не удалось выполнить действие. Проверьте соединение и попробуйте ещё раз.",
+]);
+
+const form = document.querySelector("#expense-form");
+const formTitle = document.querySelector("#form-title");
+const dateInput = document.querySelector("#spent-on");
 const amountInput = document.querySelector("#amount");
-const fromSelect = document.querySelector("#from");
-const toSelect = document.querySelector("#to");
-const swapButton = document.querySelector("#swap");
-const hint = document.querySelector("#hint");
-const result = document.querySelector("#result");
-const rateLine = document.querySelector("#rate");
-const inverseLine = document.querySelector("#inverse");
-const meta = document.querySelector("#meta");
+const categoryInput = document.querySelector("#category");
+const noteInput = document.querySelector("#note");
+const fileInput = document.querySelector("#receipt");
+const replaceHint = document.querySelector("#replace-hint");
+const preview = document.querySelector("#preview");
+const previewImage = document.querySelector("#preview-image");
+const previewName = document.querySelector("#preview-name");
+const formError = document.querySelector("#form-error");
+const saveButton = document.querySelector("#save");
+const cancelButton = document.querySelector("#cancel");
+const totalOutput = document.querySelector("#total");
+const countOutput = document.querySelector("#count");
+const statusOutput = document.querySelector("#status");
+const emptyOutput = document.querySelector("#empty");
+const list = document.querySelector("#list");
 
-const quotes = {
-  rates: { ...FALLBACK_RATES },
-  date: null,
-  fallback: true,
-};
+const fields = [dateInput, amountInput, categoryInput, noteInput, fileInput];
 
-function withNums(text) {
-  return String(text).replace(/\d+/g, (digits) => `<span class="num">${digits}</span>`);
+let expenses = [];
+let totalKopecks = 0;
+let entryCount = 0;
+let editingId = null;
+let saving = false;
+let previewUrl = "";
+
+function fillWithNums(element, text) {
+  const value = String(text);
+  const fragment = document.createDocumentFragment();
+  const re = /\d+/g;
+  let last = 0;
+  let match = re.exec(value);
+  while (match) {
+    if (match.index > last) fragment.append(value.slice(last, match.index));
+    const span = document.createElement("span");
+    span.className = "num";
+    span.textContent = match[0];
+    fragment.append(span);
+    last = match.index + match[0].length;
+    match = re.exec(value);
+  }
+  if (last < value.length) fragment.append(value.slice(last));
+  element.replaceChildren(fragment);
 }
 
-function codeHtml(code) {
-  return `<span translate="no">${code}</span>`;
+function todayISO() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
 }
 
-function formatAmount(value) {
+function isConfigured() {
+  try {
+    const url = new URL(API_URL);
+    return url.protocol === "https:" && url.hostname.endsWith(".workers.dev");
+  } catch {
+    return false;
+  }
+}
+
+function formatAmount(kopecks) {
   return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+    style: "currency",
+    currency: "RUB",
+  }).format(kopecks / 100);
 }
 
-function formatRate(value) {
-  const abs = Math.abs(value);
-  const digits = abs >= 100 ? 2 : abs >= 1 ? 4 : 6;
-  return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: digits,
-  }).format(value);
-}
-
-function formatRateDate(iso) {
+function formatDate(iso) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!match) return iso;
   const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
@@ -72,155 +124,409 @@ function formatRateDate(iso) {
   }).format(date);
 }
 
+function categoryName(id) {
+  return CATEGORIES.find((category) => category.id === id)?.name ?? "Прочее";
+}
+
 function parseAmount(raw) {
   const text = raw.trim().replace(/\s/g, "").replace(",", ".");
-  if (text === "") return null;
-  const value = Number(text);
-  if (!Number.isFinite(value)) return null;
-  return value;
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
+  const [rubles, fraction = ""] = text.split(".");
+  const kopecks = Number(rubles) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(kopecks) || kopecks <= 0 || kopecks > MAX_KOPECKS) return null;
+  return kopecks;
 }
 
-function isCurrency(code) {
-  return CURRENCIES.some((currency) => currency.code === code);
+function extensionOf(name) {
+  const match = /\.([a-z0-9]+)$/i.exec(name);
+  return match ? match[1].toLowerCase() : "";
 }
 
-function fillSelect(select, selected) {
-  select.replaceChildren();
-  for (const currency of CURRENCIES) {
-    const option = document.createElement("option");
-    option.value = currency.code;
-    option.textContent = `${currency.code} — ${currency.name}`;
-    select.append(option);
+function fileKind(file) {
+  if (file.size <= 0) return { error: "Файл пустой." };
+  if (file.size > MAX_BYTES) return { error: "Файл больше 10 МБ." };
+  let mime = MIME_EXT[file.type] ? file.type : "";
+  if (!mime && (file.type === "" || file.type === "application/octet-stream")) {
+    mime = EXT_MIME[extensionOf(file.name)] ?? "";
   }
-  select.value = selected;
+  if (!mime) return { error: "Нужен файл JPEG, PNG, WebP или PDF." };
+  const canonical = mime === "image/jpg" ? "image/jpeg" : mime;
+  return { mime: canonical, ext: MIME_EXT[canonical] };
 }
 
-function applyParams() {
-  const params = new URLSearchParams(location.search);
-  const amount = params.get("amount");
-  const from = params.get("from");
-  const to = params.get("to");
-  if (amount !== null) amountInput.value = amount;
-  if (isCurrency(from)) fromSelect.value = from;
-  if (isCurrency(to)) toSelect.value = to;
+function announce(message) {
+  fillWithNums(statusOutput, message);
 }
 
-function syncUrl() {
-  const params = new URLSearchParams(location.search);
-  params.set("amount", amountInput.value);
-  params.set("from", fromSelect.value);
-  params.set("to", toSelect.value);
-  const next = `${location.pathname}?${params.toString()}`;
-  if (`${location.pathname}${location.search}` !== next) {
-    history.replaceState(null, "", next);
-  }
-}
-
-function rateOf(code) {
-  const key = code.toLowerCase();
-  const value = quotes.rates[key];
-  return typeof value === "number" && value > 0 ? value : null;
-}
-
-function pairRate(from, to) {
-  const fromRate = rateOf(from);
-  const toRate = rateOf(to);
-  if (fromRate === null || toRate === null) return null;
-  return toRate / fromRate;
-}
-
-function render(options = {}) {
-  const amount = parseAmount(amountInput.value);
-  const from = fromSelect.value;
-  const to = toSelect.value;
-  amountInput.setAttribute("aria-invalid", amount === null ? "true" : "false");
-
-  if (amount === null) {
-    hint.hidden = false;
-    result.textContent = "";
-    rateLine.textContent = "";
-    inverseLine.textContent = "";
-    meta.textContent = "";
-    if (options.sync !== false) syncUrl();
+function setError(message) {
+  if (!message) {
+    formError.hidden = true;
+    formError.replaceChildren();
     return;
   }
-
-  hint.hidden = true;
-  const direct = pairRate(from, to);
-  if (direct === null) {
-    result.textContent = "Нет курса для этой пары. Выберите другие валюты.";
-    rateLine.textContent = "";
-    inverseLine.textContent = "";
-    meta.textContent = "";
-    if (options.sync !== false) syncUrl();
-    return;
-  }
-
-  const converted = amount * direct;
-  const inverse = direct === 0 ? null : 1 / direct;
-
-  result.innerHTML = withNums(`${formatAmount(converted)}\u00A0${codeHtml(to)}`);
-  rateLine.innerHTML = withNums(`1\u00A0${codeHtml(from)} = ${formatRate(direct)}\u00A0${codeHtml(to)}`);
-  inverseLine.innerHTML =
-    inverse === null
-      ? ""
-      : withNums(`1\u00A0${codeHtml(to)} = ${formatRate(inverse)}\u00A0${codeHtml(from)}`);
-
-  if (quotes.fallback) {
-    meta.textContent = "Показан запасной курс";
-  } else {
-    meta.innerHTML = withNums(`Курс на ${formatRateDate(quotes.date)}`);
-  }
-
-  if (options.sync !== false) syncUrl();
+  formError.hidden = false;
+  fillWithNums(formError, message);
 }
 
-function hasNeededRates(rates) {
-  return CURRENCIES.every((currency) => {
-    const key = currency.code.toLowerCase();
-    return key === "usd" || (typeof rates[key] === "number" && rates[key] > 0);
+function clearInvalid() {
+  for (const field of fields) field.setAttribute("aria-invalid", "false");
+  setError("");
+}
+
+function showFieldError(field, message) {
+  for (const input of fields) input.setAttribute("aria-invalid", input === field ? "true" : "false");
+  setError(message);
+  field.focus();
+}
+
+function clearPreview() {
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = "";
+  preview.hidden = true;
+  previewImage.hidden = true;
+  previewImage.removeAttribute("src");
+  previewName.replaceChildren();
+}
+
+function showPreview(file, kind) {
+  clearPreview();
+  fillWithNums(previewName, file.name);
+  preview.hidden = false;
+  if (kind?.mime?.startsWith("image/")) {
+    previewUrl = URL.createObjectURL(file);
+    previewImage.src = previewUrl;
+    previewImage.hidden = false;
+  }
+}
+
+function setBusy(busy) {
+  for (const field of [...fields, saveButton, cancelButton]) field.disabled = busy;
+  form.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+function resetForm() {
+  editingId = null;
+  form.reset();
+  dateInput.value = todayISO();
+  categoryInput.value = "materials";
+  formTitle.textContent = "Новый расход";
+  saveButton.textContent = "Добавить";
+  cancelButton.hidden = true;
+  replaceHint.hidden = true;
+  clearPreview();
+  clearInvalid();
+}
+
+function appError(message) {
+  const error = new Error(message);
+  error.appMessage = message;
+  return error;
+}
+
+function knownError(message) {
+  return KNOWN_ERRORS.has(message)
+    ? message
+    : "Не удалось выполнить действие. Проверьте соединение и попробуйте ещё раз.";
+}
+
+function readForm() {
+  const spentOn = dateInput.value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn) || spentOn < "2000-01-01" || spentOn > "2100-12-31") {
+    return { ok: false, field: dateInput, message: "Укажите дату." };
+  }
+  const kopecks = parseAmount(amountInput.value);
+  if (kopecks === null) {
+    return {
+      ok: false,
+      field: amountInput,
+      message: "Введите сумму больше нуля, например 1500 или 1500,50.",
+    };
+  }
+  const category = categoryInput.value;
+  if (!CATEGORIES.some((item) => item.id === category)) {
+    return { ok: false, field: categoryInput, message: "Выберите категорию." };
+  }
+  const note = noteInput.value.trim();
+  if (note.length > MAX_NOTE) {
+    return { ok: false, field: noteInput, message: "Заметка длиннее 200 символов." };
+  }
+  const file = fileInput.files?.[0] ?? null;
+  let kind = null;
+  if (file) {
+    kind = fileKind(file);
+    if (kind.error) return { ok: false, field: fileInput, message: kind.error };
+  }
+  return { ok: true, value: { spentOn, kopecks, category, note, file, kind } };
+}
+
+function receiptUrl(expense) {
+  if (!/^[0-9a-f-]{36}$/.test(expense.id)) return "";
+  if (!/^[0-9a-f-]{36}\.(jpg|png|webp|pdf)$/.test(expense.receipt_name ?? "")) return "";
+  return `${API_URL}/api/receipts/${expense.id}/${expense.receipt_name}`;
+}
+
+function render() {
+  fillWithNums(totalOutput, formatAmount(totalKopecks));
+  const countText = entryCount > expenses.length
+    ? `Записей: ${entryCount}. В списке ${expenses.length}.`
+    : `Записей: ${expenses.length}`;
+  fillWithNums(countOutput, countText);
+  emptyOutput.hidden = expenses.length !== 0;
+  list.replaceChildren();
+
+  for (const expense of expenses) {
+    const item = document.createElement("li");
+    item.dataset.id = expense.id;
+    if (expense.id === editingId) item.dataset.editing = "true";
+
+    const title = document.createElement("h3");
+    fillWithNums(title, formatDate(expense.spent_on));
+    item.append(title);
+
+    const category = document.createElement("p");
+    category.className = "category";
+    category.textContent = categoryName(expense.category);
+    item.append(category);
+
+    if (expense.note) {
+      const note = document.createElement("p");
+      note.className = "note";
+      fillWithNums(note, expense.note);
+      item.append(note);
+    }
+
+    const amount = document.createElement("p");
+    amount.className = "amount";
+    fillWithNums(amount, formatAmount(expense.amount_kopecks));
+    item.append(amount);
+
+    const url = receiptUrl(expense);
+    if (url) {
+      const receipt = document.createElement("div");
+      receipt.className = "receipt";
+      if (/\.(jpg|png|webp)$/.test(expense.receipt_name)) {
+        const image = document.createElement("img");
+        image.src = url;
+        image.alt = "";
+        image.loading = "lazy";
+        image.decoding = "async";
+        receipt.append(image);
+      }
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Открыть чек";
+      receipt.append(link);
+      item.append(receipt);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "item-actions";
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.dataset.action = "edit";
+    editButton.textContent = "Изменить";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.dataset.action = "delete";
+    deleteButton.textContent = "Удалить";
+    actions.append(editButton, deleteButton);
+    item.append(actions);
+    list.append(item);
+  }
+}
+
+function normalize(row) {
+  if (!row || typeof row.id !== "string" || !/^[0-9a-f-]{36}$/.test(row.id)) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.spent_on)) return null;
+  if (!Number.isSafeInteger(row.amount_kopecks)) return null;
+  const receiptName = typeof row.receipt_name === "string"
+    && /^[0-9a-f-]{36}\.(jpg|png|webp|pdf)$/.test(row.receipt_name)
+    ? row.receipt_name
+    : null;
+  return {
+    id: row.id,
+    spent_on: row.spent_on,
+    amount_kopecks: row.amount_kopecks,
+    category: typeof row.category === "string" ? row.category : "other",
+    note: typeof row.note === "string" ? row.note : "",
+    receipt_name: receiptName,
+  };
+}
+
+async function api(path, options) {
+  let response;
+  try {
+    response = await fetch(`${API_URL}${path}`, options);
+  } catch {
+    throw appError("Не удалось выполнить действие. Проверьте соединение и попробуйте ещё раз.");
+  }
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+  }
+  if (!response.ok) throw appError(knownError(body?.error));
+  return body;
+}
+
+async function loadExpenses() {
+  const data = await api("/api/expenses");
+  expenses = (data?.expenses ?? []).map(normalize).filter(Boolean);
+  totalKopecks = Number.isSafeInteger(data?.total_kopecks)
+    ? data.total_kopecks
+    : expenses.reduce((sum, expense) => sum + expense.amount_kopecks, 0);
+  entryCount = Number.isSafeInteger(data?.count) ? data.count : expenses.length;
+  render();
+}
+
+function formDataFor(value) {
+  const body = new FormData();
+  body.set("spent_on", value.spentOn);
+  body.set("amount_kopecks", String(value.kopecks));
+  body.set("category", value.category);
+  body.set("note", value.note);
+  if (value.file) body.set("receipt", value.file, `receipt.${value.kind.ext}`);
+  return body;
+}
+
+async function createExpense(value) {
+  await api("/api/expenses", { method: "POST", body: formDataFor(value) });
+}
+
+async function updateExpense(id, value) {
+  await api(`/api/expenses/${id}`, { method: "PATCH", body: formDataFor(value) });
+}
+
+async function deleteExpense(id) {
+  await api(`/api/expenses/${id}`, { method: "DELETE" });
+}
+
+function startEdit(expense) {
+  editingId = expense.id;
+  dateInput.value = expense.spent_on;
+  amountInput.value = (expense.amount_kopecks / 100).toFixed(2).replace(".", ",");
+  categoryInput.value = CATEGORIES.some((item) => item.id === expense.category) ? expense.category : "other";
+  noteInput.value = expense.note;
+  fileInput.value = "";
+  clearPreview();
+  clearInvalid();
+  formTitle.textContent = "Изменить расход";
+  saveButton.textContent = "Сохранить";
+  cancelButton.hidden = false;
+  replaceHint.hidden = false;
+  render();
+  const motion = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  form.scrollIntoView({ behavior: motion, block: "start" });
+  amountInput.focus();
+}
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files?.[0];
+  if (!file) {
+    clearPreview();
+    return;
+  }
+  const kind = fileKind(file);
+  if (kind.error) {
+    showPreview(file, null);
+    showFieldError(fileInput, kind.error);
+    return;
+  }
+  clearInvalid();
+  showPreview(file, kind);
+});
+
+cancelButton.addEventListener("click", () => {
+  resetForm();
+  render();
+  amountInput.focus();
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (saving) return;
+  if (!isConfigured()) {
+    setError("Хранилище ещё не подключено.");
+    return;
+  }
+  const parsed = readForm();
+  if (!parsed.ok) {
+    showFieldError(parsed.field, parsed.message);
+    return;
+  }
+  const wasEditing = editingId !== null;
+  const currentId = editingId;
+  saving = true;
+  setBusy(true);
+  try {
+    if (wasEditing) await updateExpense(currentId, parsed.value);
+    else await createExpense(parsed.value);
+    resetForm();
+    await loadExpenses();
+    announce(wasEditing ? "Расход сохранён." : "Расход добавлен.");
+    amountInput.focus();
+  } catch (error) {
+    console.error(error);
+    setError(knownError(error.appMessage));
+  } finally {
+    saving = false;
+    setBusy(false);
+  }
+});
+
+list.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button || saving) return;
+  const id = button.closest("li")?.dataset.id;
+  const expense = expenses.find((item) => item.id === id);
+  if (!expense) return;
+  if (button.dataset.action === "edit") {
+    startEdit(expense);
+    return;
+  }
+  if (button.dataset.action !== "delete") return;
+  if (!confirm(`Удалить расход ${formatAmount(expense.amount_kopecks)}?`)) return;
+  saving = true;
+  setBusy(true);
+  try {
+    await deleteExpense(expense.id);
+    if (editingId === expense.id) resetForm();
+    await loadExpenses();
+    announce("Расход удалён.");
+  } catch (error) {
+    console.error(error);
+    setError(knownError(error.appMessage));
+  } finally {
+    saving = false;
+    setBusy(false);
+  }
+});
+
+for (const field of fields) {
+  field.addEventListener("input", () => {
+    if (field.getAttribute("aria-invalid") === "true") clearInvalid();
   });
 }
 
-async function loadRates() {
-  try {
-    const response = await fetch(API_URL);
-    if (!response.ok) throw new Error(String(response.status));
-    const data = await response.json();
-    if (!data.usd || !hasNeededRates(data.usd) || typeof data.date !== "string") {
-      throw new Error("incomplete");
-    }
-    quotes.rates = { usd: 1, ...data.usd };
-    quotes.date = data.date;
-    quotes.fallback = false;
-  } catch {
-    quotes.rates = { ...FALLBACK_RATES };
-    quotes.date = null;
-    quotes.fallback = true;
-  }
-  render();
+resetForm();
+
+if (!isConfigured()) {
+  announce("Хранилище ещё не подключено.");
+  saveButton.disabled = true;
+} else {
+  announce("Загрузка…");
+  loadExpenses()
+    .then(() => {
+      statusOutput.replaceChildren();
+    })
+    .catch((error) => {
+      console.error(error);
+      announce(knownError(error.appMessage));
+    });
 }
-
-fillSelect(fromSelect, "RUB");
-fillSelect(toSelect, "USD");
-applyParams();
-
-amountInput.addEventListener("input", () => render());
-fromSelect.addEventListener("change", () => render());
-toSelect.addEventListener("change", () => render());
-swapButton.addEventListener("click", () => {
-  const nextFrom = toSelect.value;
-  toSelect.value = fromSelect.value;
-  fromSelect.value = nextFrom;
-  render();
-});
-document.querySelector("#converter").addEventListener("submit", (event) => {
-  event.preventDefault();
-});
-window.addEventListener("popstate", () => {
-  applyParams();
-  render({ sync: false });
-});
-
-render();
-loadRates();

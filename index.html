@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6f8">
-  <title>Конвертер валют</title>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <meta name="description" content="Общий журнал расходов на ремонт: сумма, категория и чек.">
+  <title>Учёт ремонта</title>
   <link rel="preconnect" href="https://upload.wikimedia.org">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -19,46 +19,90 @@
     height="72"
     fetchpriority="high"
   >
-  <main class="card" id="main">
-    <h1>Конвертер валют</h1>
-    <form id="converter">
-      <label>
-        Сумма
+  <main id="main">
+    <h1>Учёт ремонта</h1>
+    <p class="lead">Суммы и чеки общие для всех, у кого есть ссылка на эту страницу.</p>
+    <form id="expense-form" class="card" novalidate>
+      <h2 id="form-title">Новый расход</h2>
+      <div class="pair">
+        <label for="spent-on">Дата</label>
+        <input id="spent-on" name="spent-on" type="date" required>
+      </div>
+      <div class="pair">
+        <label for="amount">Сумма</label>
         <input
           id="amount"
           name="amount"
           type="text"
           inputmode="decimal"
-          value="100"
           autocomplete="off"
           spellcheck="false"
-          aria-describedby="hint"
-          placeholder="например, 100…"
+          autocapitalize="off"
+          placeholder="например, 1500…"
+          aria-describedby="amount-hint"
+          aria-errormessage="form-error"
+          required
         >
-      </label>
-      <div aria-live="polite">
-        <p id="hint" class="hint" hidden>Введите число, например <span class="num">100</span>.</p>
+        <p id="amount-hint" class="hint">Например, <span class="num">1500</span> или <span class="num">1500</span>,<span class="num">50</span>.</p>
       </div>
       <div class="pair">
-        <label>
-          Из
-          <select id="from" name="from"></select>
-        </label>
-        <button id="swap" type="button">Поменять валюты</button>
-        <label>
-          В
-          <select id="to" name="to"></select>
-        </label>
+        <label for="category">Категория</label>
+        <select id="category" name="category" required>
+          <option value="materials">Материалы</option>
+          <option value="work">Работы</option>
+          <option value="delivery">Доставка</option>
+          <option value="tools">Инструмент</option>
+          <option value="other">Прочее</option>
+        </select>
+      </div>
+      <div class="pair">
+        <label for="note">Заметка</label>
+        <input
+          id="note"
+          name="note"
+          type="text"
+          maxlength="200"
+          autocomplete="off"
+          placeholder="например, краска для стен"
+          aria-errormessage="form-error"
+        >
+      </div>
+      <div class="pair">
+        <label for="receipt">Чек</label>
+        <input
+          id="receipt"
+          name="receipt"
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf"
+          aria-describedby="file-hint replace-hint"
+          aria-errormessage="form-error"
+        >
+        <p id="file-hint" class="hint">JPEG, PNG, WebP или PDF, до <span class="num">10</span> МБ.</p>
+        <p id="replace-hint" class="hint" hidden>Новый файл заменит текущий чек. Если файл не выбран, чек останется.</p>
+        <div id="preview" class="preview" hidden>
+          <img id="preview-image" alt="" hidden>
+          <p id="preview-name"></p>
+        </div>
+      </div>
+      <p id="form-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button id="save" type="submit">Добавить</button>
+        <button id="cancel" type="button" hidden>Отмена</button>
       </div>
     </form>
-    <h2>Результат</h2>
-    <div id="output" aria-live="polite">
-      <p id="result" class="result"></p>
-      <p id="rate"></p>
-      <p id="inverse"></p>
-      <p id="meta" class="meta"></p>
-    </div>
+    <section class="card" aria-labelledby="total-title">
+      <h2 id="total-title">Итого</h2>
+      <p id="total" class="result"></p>
+      <p id="count" class="meta"></p>
+    </section>
+    <section class="list-section" aria-labelledby="list-title">
+      <h2 id="list-title">Расходы</h2>
+      <p id="status" class="meta" role="status"></p>
+      <p id="empty" class="meta" hidden>Пока нет расходов.</p>
+      <ul id="list"></ul>
+    </section>
   </main>
-  <script src="app.js"></script>
+  <noscript><p class="lead">Для журнала нужен JavaScript.</p></noscript>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

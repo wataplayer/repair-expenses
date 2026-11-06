@@ -70,34 +70,69 @@ li::marker {
   transform: none;
 }
 
-.card {
-  max-width: 420px;
-  margin: 48px auto;
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  display: grid;
+  gap: 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.lead,
+.hint,
+.meta,
+.error {
+  margin: 0;
+}
+
+.lead,
+.meta {
+  color: #5c6b7a;
+}
+
+.hint {
+  color: #5c6b7a;
+  font-size: 14px;
+}
+
+.error {
+  color: #9b1c1c;
+}
+
+.card,
+#list li {
   padding: 24px;
   background: #fff;
   border: 1px solid #d5dbe3;
   border-radius: 12px;
 }
 
-h1 {
-  margin: 0 0 20px;
-  font-size: 28px;
-}
-
-h2 {
-  margin: 24px 0 8px;
-  font-size: 20px;
-}
-
-form {
+#expense-form {
   display: grid;
   gap: 12px;
 }
 
-label {
+.pair {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+label {
   font-size: 14px;
 }
 
@@ -114,6 +149,7 @@ input,
 select {
   width: 100%;
   min-width: 0;
+  min-height: 40px;
   padding: 8px 10px;
   border: 1px solid #c5ced8;
   border-radius: 8px;
@@ -121,38 +157,57 @@ select {
   color: #1c2430;
 }
 
-#amount {
-  color: green;
-  font-variant-numeric: tabular-nums;
-}
-
+#amount,
+#spent-on,
 #amount::placeholder {
   color: green;
-  opacity: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 input:focus-visible,
 select:focus-visible,
 button:focus-visible,
+a:focus-visible,
 .skip:focus-visible {
   outline: 2px solid #1c2430;
   outline-offset: 2px;
 }
 
-.pair {
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: #9b1c1c;
+}
+
+.preview {
   display: grid;
-  grid-template-columns: 1fr;
+  gap: 6px;
+  justify-items: start;
+}
+
+.preview img,
+.receipt img {
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
+  border: 1px solid #d5dbe3;
+  border-radius: 8px;
+  background: #f4f6f8;
+}
+
+.actions,
+.item-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 button {
-  padding: 8px 12px;
+  min-height: 40px;
+  padding: 8px 14px;
   border: 1px solid #c5ced8;
   border-radius: 8px;
   background-color: #eef2f6;
   color: #1c2430;
-  justify-self: start;
-  white-space: nowrap;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
@@ -162,6 +217,22 @@ button:active {
   background-color: #d5dee8;
 }
 
+#save {
+  border-color: #1c2430;
+  background-color: #1c2430;
+  color: #fff;
+}
+
+#save:hover,
+#save:active {
+  background-color: #2c3848;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 @media (prefers-reduced-motion: reduce) {
   button {
     transition: none;
@@ -169,26 +240,73 @@ button:active {
 }
 
 .result,
-#rate,
-#inverse {
+.amount,
+#count {
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
 .result {
   margin: 0 0 8px;
+  font-size: 28px;
+}
+
+#count {
+  margin: 0;
+}
+
+.list-section {
+  display: grid;
+  gap: 12px;
+}
+
+.list-section h2 {
+  margin: 0;
+}
+
+#list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+#list li {
+  min-width: 0;
+}
+
+#list li[data-editing="true"] {
+  border-color: #1c2430;
+}
+
+#list p {
+  margin: 0 0 8px;
+}
+
+.category {
+  color: #5c6b7a;
+  font-size: 14px;
+}
+
+.amount {
   font-size: 22px;
 }
 
-.hint {
-  margin: -6px 0 0;
+.receipt {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 
-.meta {
-  margin-bottom: 0;
-  color: #5c6b7a;
+a {
+  color: #1c2430;
 }
 
-p {
-  margin: 0 0 6px;
+.note {
+  overflow-wrap: anywhere;
+}
+
+[hidden] {
+  display: none !important;
 }

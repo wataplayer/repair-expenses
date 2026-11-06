@@ -1,0 +1,13 @@
+name = "wataplayer-repair-expenses"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+account_id = "d6abd58df8e198de0bf00ee1c1d47ed8"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "repair-expenses"
+database_id = "f3256414-b302-4148-899a-cb435ae37d08"
+
+[[kv_namespaces]]
+binding = "RECEIPTS"
+id = "b50561db6ac14229bfa383142c23fa21"
